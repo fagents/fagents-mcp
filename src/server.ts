@@ -6,7 +6,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { z } from "zod";
 import { authenticate } from "./auth.js";
 import { runWithAgent, getServerConfig, getEmailConfig, getImapConfig } from "./config.js";
-import { sendEmail } from "./email.js";
+import { sendEmail, buildRawMessage } from "./email.js";
 import * as imap from "./imap.js";
 
 const log = (msg: string) => console.log(`[${new Date().toISOString()}] ${msg}`);
@@ -41,6 +41,15 @@ function createMcpServer(): McpServer {
       try {
         const config = getEmailConfig();
         const result = await sendEmail(config, params);
+        // Save to Sent folder (best-effort — don't fail the send)
+        try {
+          const imapConfig = getImapConfig();
+          const raw = await buildRawMessage(config, params);
+          const sentFolder = await imap.appendToSent(imapConfig, raw);
+          if (sentFolder) log(`send_email saved to ${sentFolder}`);
+        } catch (e) {
+          log(`send_email: failed to save to Sent: ${e instanceof Error ? e.message : e}`);
+        }
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);

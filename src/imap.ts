@@ -180,4 +180,14 @@ export async function downloadAttachment(config: ImapConfig, mailbox: string, ui
     }
   });
 }
+export async function appendToSent(config: ImapConfig, rawMessage: Buffer | string): Promise<string | null> {
+  return withClient(config, async (client) => {
+    const mailboxes = await client.list();
+    const sentBox = mailboxes.find(mb => mb.specialUse === "\\Sent") ||
+                    mailboxes.find(mb => /^sent$/i.test(mb.name));
+    if (!sentBox) return null;
+    await client.append(sentBox.path, rawMessage, ["\\Seen"]);
+    return sentBox.path;
+  });
+}
 /* eslint-enable @typescript-eslint/no-explicit-any */
