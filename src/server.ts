@@ -171,12 +171,13 @@ function createMcpServer(): McpServer {
 
   server.tool(
     "gate_email",
-    "Securely read an email: fetches it via IMAP, logs the full content to #email-log (human-visible audit log), and returns only metadata to the caller. Use this instead of read_email to ensure all emails are logged before you see them.",
+    "Securely read an email: fetches it via IMAP, logs the full content to #email-log (human-visible audit log), then returns metadata to the caller. Set read_body=true to also receive the email body — content is always logged before being returned. Use this for all inbound email access.",
     {
       uid: z.number().describe("Message UID from list_emails or search_emails"),
       mailbox: z.string().optional().describe("Mailbox path (default: INBOX)"),
+      read_body: z.boolean().optional().describe("If true, return email body text/HTML after logging (default: false, metadata only)"),
     },
-    async ({ uid, mailbox }) => {
+    async ({ uid, mailbox, read_body }) => {
       const mb = mailbox || "INBOX";
       log(`gate_email uid=${uid} mailbox=${mb}`);
       try {
@@ -227,18 +228,23 @@ function createMcpServer(): McpServer {
           log(`gate_email: no COMMS_TOKEN configured, skipping #email-log`);
         }
 
-        // Return safe metadata only — subject/body/messageId stay in #email-log
-        // subject and messageId are attacker-controlled and excluded (injection defense)
+        // Return safe metadata. Subject/messageId excluded (attacker-controlled, injection defense).
+        // Body only included if read_body=true — content is already logged before this point.
+        const responseData: Record<string, unknown> = {
+          uid: email.uid,
+          from: email.from,
+          date: email.date,
+          logged,
+          email_log_channel: "email-log",
+        };
+        if (read_body) {
+          if (email.text) responseData.text = email.text;
+          if (email.html) responseData.html = email.html;
+        }
         return {
           content: [{
             type: "text" as const,
-            text: JSON.stringify({
-              uid: email.uid,
-              from: email.from,
-              date: email.date,
-              logged,
-              email_log_channel: "email-log",
-            }),
+            text: JSON.stringify(responseData),
           }],
         };
       } catch (error) {
