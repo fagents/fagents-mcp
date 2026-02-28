@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { authenticate } from "./auth.js";
-import { runWithAgent, getServerConfig, getEmailConfig, getImapConfig } from "./config.js";
+import { runWithAgent, getServerConfig, getEmailConfig, getImapConfig, getEnv, getCurrentAgentId } from "./config.js";
 import { sendEmail, buildRawMessage } from "./email.js";
 import * as imap from "./imap.js";
 
@@ -169,6 +169,89 @@ function createMcpServer(): McpServer {
     }
   );
 
+  server.tool(
+    "gate_email",
+    "Securely read an email: fetches it via IMAP, logs the full content to #email-log (human-visible audit log), and returns only metadata to the caller. Use this instead of read_email to ensure all emails are logged before you see them.",
+    {
+      uid: z.number().describe("Message UID from list_emails or search_emails"),
+      mailbox: z.string().optional().describe("Mailbox path (default: INBOX)"),
+    },
+    async ({ uid, mailbox }) => {
+      const mb = mailbox || "INBOX";
+      log(`gate_email uid=${uid} mailbox=${mb}`);
+      try {
+        const imapConfig = getImapConfig();
+        const email = await imap.getMessage(imapConfig, mb, uid);
+
+        // Log full content to #email-log BEFORE returning anything to caller
+        const commsUrl = getEnv("COMMS_URL") ?? "http://127.0.0.1:9754";
+        const commsToken = getEnv("COMMS_TOKEN");
+        const agentId = getCurrentAgentId() ?? "unknown";
+
+        const attachmentList = email.attachments.length > 0
+          ? email.attachments.map(a => `${a.filename} (${a.contentType}, ${a.size ?? "?"}B)`).join(", ")
+          : "(none)";
+
+        const logLines = [
+          `[gate_email] uid=${uid} mailbox=${mb} agent=${agentId}`,
+          `From: ${email.from}`,
+          `To: ${email.to}`,
+          `Subject: ${email.subject}`,
+          `Date: ${email.date}`,
+          `MessageId: ${email.messageId ?? "(none)"}`,
+          email.cc ? `Cc: ${email.cc}` : null,
+          `Attachments: ${attachmentList}`,
+          `---`,
+          email.text ?? email.html ?? "(no body)",
+        ].filter(Boolean).join("\n");
+
+        let logged = false;
+        if (commsToken) {
+          try {
+            const logResp = await fetch(`${commsUrl}/api/channels/email-log/messages`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${commsToken}`,
+              },
+              body: JSON.stringify({ message: logLines }),
+            });
+            logged = logResp.ok;
+            if (!logged) {
+              log(`gate_email: failed to log to #email-log: ${logResp.status}`);
+            }
+          } catch (e) {
+            log(`gate_email: comms error: ${e instanceof Error ? e.message : e}`);
+          }
+        } else {
+          log(`gate_email: no COMMS_TOKEN configured, skipping #email-log`);
+        }
+
+        // Return metadata only — body stays in #email-log, not returned to caller
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              uid: email.uid,
+              from: email.from,
+              to: email.to,
+              subject: email.subject,
+              date: email.date,
+              messageId: email.messageId,
+              attachments: email.attachments,
+              logged,
+              email_log_channel: "email-log",
+            }),
+          }],
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        log(`gate_email error: ${msg}`);
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: msg }) }] };
+      }
+    }
+  );
+
   return server;
 }
 
@@ -213,7 +296,7 @@ async function main() {
   const config = getServerConfig();
   app.listen(config.port, config.host, () => {
     log(`fagents-mcp listening on http://${config.host}:${config.port}/mcp`);
-    log(`6 email tools registered`);
+    log(`7 email tools registered`);
   });
 }
 
