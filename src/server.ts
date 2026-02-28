@@ -227,18 +227,15 @@ function createMcpServer(): McpServer {
           log(`gate_email: no COMMS_TOKEN configured, skipping #email-log`);
         }
 
-        // Return metadata only — body stays in #email-log, not returned to caller
+        // Return safe metadata only — subject/body/messageId stay in #email-log
+        // subject and messageId are attacker-controlled and excluded (injection defense)
         return {
           content: [{
             type: "text" as const,
             text: JSON.stringify({
               uid: email.uid,
               from: email.from,
-              to: email.to,
-              subject: email.subject,
               date: email.date,
-              messageId: email.messageId,
-              attachments: email.attachments,
               logged,
               email_log_channel: "email-log",
             }),
