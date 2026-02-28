@@ -238,14 +238,16 @@ function createMcpServer(): McpServer {
           email_log_channel: "email-log",
         };
         if (read_body) {
-          // Strip closing tag to prevent boundary escape, then wrap in untrusted tags
+          // Strip all untrusted tag variants to prevent boundary escape, then wrap in untrusted tags
+          const stripUntrusted = (s: string) =>
+            s.replace(/<\/?untrusted>/gi, "[TAG_STRIPPED]")
+             .replace(/\[\/untrusted\]/gi, "[TAG_STRIPPED]")
+             .replace(/\{\/untrusted\}/gi, "[TAG_STRIPPED]");
           if (email.text) {
-            const safe = email.text.replace(/<\/untrusted>/gi, "[/untrusted]");
-            responseData.text = `<untrusted>\n${safe}\n</untrusted>`;
+            responseData.text = `<untrusted>\n${stripUntrusted(email.text)}\n</untrusted>`;
           }
           if (email.html) {
-            const safe = email.html.replace(/<\/untrusted>/gi, "[/untrusted]");
-            responseData.html = `<untrusted>\n${safe}\n</untrusted>`;
+            responseData.html = `<untrusted>\n${stripUntrusted(email.html)}\n</untrusted>`;
           }
         }
         return {
