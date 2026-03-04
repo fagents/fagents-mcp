@@ -302,6 +302,30 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok" });
 });
 
+// --- REST endpoints (non-MCP, for daemon polling) ---
+
+app.get("/api/check-email", authenticate, async (req: Request, res: Response) => {
+  const agentId = (req as unknown as Record<string, unknown>).agentId as string | undefined;
+  const sinceUid = parseInt(req.query.since_uid as string || "0", 10);
+  if (isNaN(sinceUid) || sinceUid < 0) {
+    res.status(400).json({ error: "Invalid since_uid parameter" });
+    return;
+  }
+  try {
+    const fn = async () => {
+      const imapConfig = getImapConfig();
+      return await imap.checkNewEmail(imapConfig, sinceUid);
+    };
+    const messages = agentId ? await runWithAgent(agentId, fn) : await fn();
+    log(`check-email since_uid=${sinceUid} found=${messages.length}`);
+    res.json({ messages });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    log(`check-email error: ${msg}`);
+    res.status(500).json({ error: msg });
+  }
+});
+
 // --- Start ---
 
 async function main() {

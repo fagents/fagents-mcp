@@ -180,6 +180,38 @@ export async function downloadAttachment(config: ImapConfig, mailbox: string, ui
     }
   });
 }
+export interface NewEmailEntry {
+  uid: number;
+  from: string;
+  date: string;
+}
+
+export async function checkNewEmail(config: ImapConfig, sinceUid: number, mailbox = "INBOX"): Promise<NewEmailEntry[]> {
+  return withClient(config, async (client) => {
+    const lock = await client.getMailboxLock(mailbox);
+    try {
+      // Search for UIDs greater than sinceUid
+      const result: any = await client.search({ uid: `${sinceUid + 1}:*` }, { uid: true });
+      const uids: number[] = Array.isArray(result) ? result.filter((u: number) => u > sinceUid) : [];
+      if (!uids.length) return [];
+
+      const entries: NewEmailEntry[] = [];
+      for await (const msg of client.fetch(uids, { uid: true, envelope: true }, { uid: true })) {
+        if (!msg) continue;
+        const env = msg.envelope || {};
+        entries.push({
+          uid: msg.uid,
+          from: formatAddrList(env.from),
+          date: env.date?.toISOString?.() || "",
+        });
+      }
+      return entries;
+    } finally {
+      lock.release();
+    }
+  });
+}
+
 export async function appendToSent(config: ImapConfig, rawMessage: Buffer | string): Promise<string | null> {
   return withClient(config, async (client) => {
     const mailboxes = await client.list();
