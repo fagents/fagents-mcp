@@ -11,8 +11,12 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
   const providedKey = req.headers["x-api-key"];
 
   if (!multiAgent && !config.apiKey) {
-    // No agents.json and no MCP_API_KEY — allow (local dev)
-    next();
+    // No agents.json and no MCP_API_KEY — fail closed
+    res.status(401).json({
+      jsonrpc: "2.0",
+      error: { code: -32001, message: "Unauthorized: No auth configured (set MCP_API_KEY or create agents.json)" },
+      id: null,
+    });
     return;
   }
 
