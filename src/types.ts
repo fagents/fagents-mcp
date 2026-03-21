@@ -5,7 +5,7 @@ export interface AgentConfig {
   [envKey: string]: string;
 }
 
-export interface AgentsFile {
+export interface AgentsConfig {
   agents: Record<string, AgentConfig>;
   shared?: Record<string, string>;
 }

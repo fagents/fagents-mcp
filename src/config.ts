@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, existsSync } from "fs";
 import { resolve, join } from "path";
 import { timingSafeEqual } from "crypto";
 import { AsyncLocalStorage } from "async_hooks";
-import type { AgentsFile, AgentConfig } from "./types.js";
+import type { AgentsConfig, AgentConfig } from "./types.js";
 
 // --- Agent context (AsyncLocalStorage) ---
 
@@ -18,7 +18,7 @@ export function getCurrentAgentId(): string | undefined {
 
 // --- Agents config loading ---
 
-let agentsConfig: AgentsFile | null = null;
+let agentsConfig: AgentsConfig | null = null;
 
 function parseEnvFile(filePath: string): Record<string, string> {
   const env: Record<string, string> = {};
@@ -39,7 +39,7 @@ function parseEnvFile(filePath: string): Record<string, string> {
   return env;
 }
 
-function loadAgentsConfig(): AgentsFile {
+function loadAgentsConfig(): AgentsConfig {
   if (agentsConfig) return agentsConfig;
 
   // Read per-agent email.env files from .agents/ directory
