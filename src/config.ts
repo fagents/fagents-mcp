@@ -1,8 +1,8 @@
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { readFileSync, readdirSync, existsSync } from "fs";
+import { resolve, join } from "path";
 import { timingSafeEqual } from "crypto";
 import { AsyncLocalStorage } from "async_hooks";
-import type { AgentsFile } from "./types.js";
+import type { AgentsFile, AgentConfig } from "./types.js";
 
 // --- Agent context (AsyncLocalStorage) ---
 
@@ -20,21 +20,48 @@ export function getCurrentAgentId(): string | undefined {
 
 let agentsConfig: AgentsFile | null = null;
 
+function parseEnvFile(filePath: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  const lines = readFileSync(filePath, "utf-8").split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx < 1) continue;
+    const key = trimmed.slice(0, eqIdx);
+    const val = trimmed.slice(eqIdx + 1);
+    env[key] = val;
+  }
+  return env;
+}
+
 function loadAgentsConfig(): AgentsFile {
   if (agentsConfig) return agentsConfig;
 
-  const configPath = resolve(process.cwd(), "agents.json");
+  // Read per-agent email.env files from .agents/ directory
+  const agentsDir = process.env.AGENTS_DIR || resolve(process.cwd(), "../.agents");
+  const agents: Record<string, AgentConfig> = {};
+
   try {
-    const raw = readFileSync(configPath, "utf-8");
-    agentsConfig = JSON.parse(raw) as AgentsFile;
-    return agentsConfig;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      agentsConfig = { agents: {}, shared: {} };
-      return agentsConfig;
+    const entries = readdirSync(agentsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const emailFile = join(agentsDir, entry.name, "email.env");
+      if (!existsSync(emailFile)) continue;
+
+      const env = parseEnvFile(emailFile);
+      const apiKey = env.MCP_API_KEY || "";
+      delete env.MCP_API_KEY;
+      agents[entry.name] = { apiKey, ...env };
     }
-    throw new Error(`Failed to load agents.json: ${(error as Error).message}`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error(`Failed to read agents dir ${agentsDir}: ${(error as Error).message}`);
+    }
   }
+
+  agentsConfig = { agents, shared: {} };
+  return agentsConfig;
 }
 
 export function hasAgents(): boolean {

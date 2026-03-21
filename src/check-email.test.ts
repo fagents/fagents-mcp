@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { readFileSync } from "fs";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdirSync, writeFileSync, rmSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import express from "express";
 import request from "supertest";
 import type { Request, Response } from "express";
@@ -7,31 +9,36 @@ import { authenticate } from "./auth.js";
 import { runWithAgent, getImapConfig } from "./config.js";
 import * as imap from "./imap.js";
 
-// Mock fs for agents.json
-vi.mock("fs", async () => {
-  const actual = await vi.importActual<typeof import("fs")>("fs");
-  return { ...actual, readFileSync: vi.fn() };
-});
-
-// Mock imap module
+// Mock imap module (not fs)
 vi.mock("./imap.js", () => ({
   checkNewEmail: vi.fn(),
 }));
 
-const mockReadFileSync = vi.mocked(readFileSync);
 const mockCheckNewEmail = vi.mocked(imap.checkNewEmail);
 
-const AGENTS_JSON = JSON.stringify({
-  agents: {
-    coo: {
-      apiKey: "key-coo-123",
-      IMAP_HOST: "imap.biz.com",
-      IMAP_USER: "coo@biz.com",
-      IMAP_PASS: "secret",
-    },
-  },
-  shared: {},
-});
+let testDir: string;
+let originalAgentsDir: string | undefined;
+
+function setupAgentsDir() {
+  testDir = join(tmpdir(), `fagents-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(testDir, { recursive: true });
+  process.env.AGENTS_DIR = testDir;
+
+  // Create agent "coo" with email.env
+  const cooDir = join(testDir, "coo");
+  mkdirSync(cooDir, { recursive: true });
+  writeFileSync(join(cooDir, "email.env"), [
+    "MCP_API_KEY=key-coo-123",
+    "IMAP_HOST=imap.biz.com",
+    "IMAP_PORT=993",
+    "IMAP_USER=coo@biz.com",
+    "IMAP_PASS=secret",
+    "SMTP_HOST=smtp.biz.com",
+    "SMTP_PORT=587",
+    "SMTP_USER=coo@biz.com",
+    "SMTP_PASS=secret",
+  ].join("\n"));
+}
 
 // Build a minimal express app with the /api/check-email route
 function buildApp() {
@@ -62,8 +69,18 @@ function buildApp() {
 describe("/api/check-email", () => {
   beforeEach(() => {
     vi.resetModules();
-    mockReadFileSync.mockReturnValue(AGENTS_JSON);
+    originalAgentsDir = process.env.AGENTS_DIR;
+    setupAgentsDir();
     mockCheckNewEmail.mockReset();
+  });
+
+  afterEach(() => {
+    if (originalAgentsDir !== undefined) {
+      process.env.AGENTS_DIR = originalAgentsDir;
+    } else {
+      delete process.env.AGENTS_DIR;
+    }
+    if (testDir) rmSync(testDir, { recursive: true, force: true });
   });
 
   it("returns empty messages when no new email", async () => {

@@ -1,67 +1,86 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { readFileSync } from "fs";
-import {
-  hasAgents, resolveAgentByApiKey, getAgentEnv,
-  getEnv, getRequiredEnv, runWithAgent,
-  getEmailConfig, getImapConfig, getServerConfig,
-} from "./config.js";
+import { mkdirSync, writeFileSync, rmSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
-// Mock fs to control agents.json loading
-vi.mock("fs", async () => {
-  const actual = await vi.importActual<typeof import("fs")>("fs");
-  return { ...actual, readFileSync: vi.fn() };
-});
+// Each test creates a real temp .agents/ dir — no fs mocking needed
 
-const mockReadFileSync = vi.mocked(readFileSync);
+let testDir: string;
+let originalAgentsDir: string | undefined;
 
-const AGENTS_JSON = JSON.stringify({
-  agents: {
-    coo: { apiKey: "key-coo-123", SMTP_FROM: "coo@biz.com" },
-    dev: { apiKey: "key-dev-456" },
-  },
-  shared: {
-    SMTP_HOST: "smtp.biz.com",
-    SMTP_PORT: "587",
-    SMTP_USER: "shared@biz.com",
-    SMTP_PASS: "secret",
-    IMAP_HOST: "imap.biz.com",
-    IMAP_PORT: "993",
-    IMAP_USER: "shared@biz.com",
-    IMAP_PASS: "secret",
-  },
-});
-
-function setupAgents() {
-  mockReadFileSync.mockReturnValue(AGENTS_JSON);
-  // Force reload by clearing module cache — agents.json is cached
-  // We need to re-import to reset. For now, use a fresh import per test file.
+function createAgentsDir(): string {
+  testDir = join(tmpdir(), `fagents-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(testDir, { recursive: true });
+  return testDir;
 }
 
-function setupNoAgents() {
-  mockReadFileSync.mockImplementation(() => { throw Object.assign(new Error("ENOENT"), { code: "ENOENT" }); });
+function writeEmailEnv(username: string, env: Record<string, string>) {
+  const dir = join(testDir, username);
+  mkdirSync(dir, { recursive: true });
+  const content = Object.entries(env).map(([k, v]) => `${k}=${v}`).join("\n");
+  writeFileSync(join(dir, "email.env"), content);
 }
 
 describe("config", () => {
   beforeEach(() => {
-    // Reset cached config by reimporting — vitest handles module isolation
     vi.resetModules();
-    setupAgents();
+    originalAgentsDir = process.env.AGENTS_DIR;
+    createAgentsDir();
+    process.env.AGENTS_DIR = testDir;
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+    if (originalAgentsDir !== undefined) {
+      process.env.AGENTS_DIR = originalAgentsDir;
+    } else {
+      delete process.env.AGENTS_DIR;
+    }
     delete process.env.SMTP_HOST;
     delete process.env.MCP_PORT;
+    if (testDir) rmSync(testDir, { recursive: true, force: true });
   });
 
+  function setupAgents() {
+    writeEmailEnv("coo", {
+      MCP_API_KEY: "key-coo-123",
+      SMTP_HOST: "smtp.biz.com",
+      SMTP_PORT: "587",
+      SMTP_FROM: "coo@biz.com",
+      SMTP_USER: "shared@biz.com",
+      SMTP_PASS: "secret",
+      IMAP_HOST: "imap.biz.com",
+      IMAP_PORT: "993",
+      IMAP_USER: "shared@biz.com",
+      IMAP_PASS: "secret",
+    });
+    writeEmailEnv("dev", {
+      MCP_API_KEY: "key-dev-456",
+      SMTP_HOST: "smtp.biz.com",
+      SMTP_PORT: "587",
+      SMTP_USER: "shared@biz.com",
+      SMTP_PASS: "secret",
+      IMAP_HOST: "imap.biz.com",
+      IMAP_PORT: "993",
+      IMAP_USER: "shared@biz.com",
+      IMAP_PASS: "secret",
+    });
+  }
+
   describe("hasAgents", () => {
-    it("returns true when agents.json has agents", async () => {
+    it("returns true when .agents/ has email.env files", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       expect(mod.hasAgents()).toBe(true);
     });
 
-    it("returns false when no agents.json", async () => {
-      setupNoAgents();
+    it("returns false when .agents/ is empty", async () => {
+      const mod = await import("./config.js");
+      expect(mod.hasAgents()).toBe(false);
+    });
+
+    it("returns false when AGENTS_DIR does not exist", async () => {
+      process.env.AGENTS_DIR = "/nonexistent/path";
       const mod = await import("./config.js");
       expect(mod.hasAgents()).toBe(false);
     });
@@ -69,12 +88,14 @@ describe("config", () => {
 
   describe("resolveAgentByApiKey", () => {
     it("resolves valid key to agent ID", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       expect(mod.resolveAgentByApiKey("key-coo-123")).toBe("coo");
       expect(mod.resolveAgentByApiKey("key-dev-456")).toBe("dev");
     });
 
     it("returns null for invalid key", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       expect(mod.resolveAgentByApiKey("wrong-key")).toBeNull();
     });
@@ -82,21 +103,25 @@ describe("config", () => {
 
   describe("getAgentEnv", () => {
     it("returns agent-specific value", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       expect(mod.getAgentEnv("coo", "SMTP_FROM")).toBe("coo@biz.com");
     });
 
-    it("falls back to shared value", async () => {
+    it("returns value from agent env (no shared fallback)", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       expect(mod.getAgentEnv("dev", "SMTP_HOST")).toBe("smtp.biz.com");
     });
 
     it("never exposes apiKey", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       expect(mod.getAgentEnv("coo", "apiKey")).toBeUndefined();
     });
 
     it("returns undefined for missing key", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       expect(mod.getAgentEnv("coo", "NONEXISTENT")).toBeUndefined();
     });
@@ -104,12 +129,14 @@ describe("config", () => {
 
   describe("getEnv with agent context", () => {
     it("resolves agent-specific env in runWithAgent", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       const result = mod.runWithAgent("coo", () => mod.getEnv("SMTP_FROM"));
       expect(result).toBe("coo@biz.com");
     });
 
-    it("falls back to shared in agent context", async () => {
+    it("resolves SMTP_HOST from agent env", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       const result = mod.runWithAgent("dev", () => mod.getEnv("SMTP_HOST"));
       expect(result).toBe("smtp.biz.com");
@@ -117,7 +144,6 @@ describe("config", () => {
 
     it("falls back to process.env outside agent context", async () => {
       process.env.SMTP_HOST = "env-host.com";
-      setupNoAgents();
       const mod = await import("./config.js");
       expect(mod.getEnv("SMTP_HOST")).toBe("env-host.com");
     });
@@ -125,7 +151,6 @@ describe("config", () => {
 
   describe("getRequiredEnv", () => {
     it("throws for missing required env", async () => {
-      setupNoAgents();
       const mod = await import("./config.js");
       expect(() => mod.getRequiredEnv("NONEXISTENT")).toThrow("Missing required config: NONEXISTENT");
     });
@@ -133,7 +158,6 @@ describe("config", () => {
 
   describe("getServerConfig", () => {
     it("returns defaults", async () => {
-      setupNoAgents();
       const mod = await import("./config.js");
       const cfg = mod.getServerConfig();
       expect(cfg.port).toBe(3000);
@@ -142,7 +166,6 @@ describe("config", () => {
 
     it("reads MCP_PORT from env", async () => {
       process.env.MCP_PORT = "8080";
-      setupNoAgents();
       const mod = await import("./config.js");
       expect(mod.getServerConfig().port).toBe(8080);
     });
@@ -150,16 +173,40 @@ describe("config", () => {
 
   describe("getEmailConfig", () => {
     it("resolves email config in agent context", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       const cfg = mod.runWithAgent("coo", () => mod.getEmailConfig());
-      expect(cfg.from).toBe("coo@biz.com"); // agent override
-      expect(cfg.host).toBe("smtp.biz.com"); // shared
+      expect(cfg.from).toBe("coo@biz.com");
+      expect(cfg.host).toBe("smtp.biz.com");
     });
 
     it("defaults SMTP_FROM to SMTP_USER", async () => {
+      setupAgents();
       const mod = await import("./config.js");
       const cfg = mod.runWithAgent("dev", () => mod.getEmailConfig());
       expect(cfg.from).toBe("shared@biz.com"); // dev has no SMTP_FROM, falls to SMTP_USER
+    });
+  });
+
+  describe("parseEnvFile edge cases", () => {
+    it("ignores comments and blank lines", async () => {
+      writeEmailEnv("edgecase", {
+        MCP_API_KEY: "key-edge-789",
+      });
+      // Add a comment and blank line to the file
+      const filePath = join(testDir, "edgecase", "email.env");
+      writeFileSync(filePath, "# This is a comment\n\nMCP_API_KEY=key-edge-789\nSMTP_HOST=test.com\n");
+      const mod = await import("./config.js");
+      expect(mod.resolveAgentByApiKey("key-edge-789")).toBe("edgecase");
+      expect(mod.getAgentEnv("edgecase", "SMTP_HOST")).toBe("test.com");
+    });
+
+    it("handles values with = signs", async () => {
+      const filePath = join(testDir, "eqtest");
+      mkdirSync(filePath, { recursive: true });
+      writeFileSync(join(filePath, "email.env"), "MCP_API_KEY=key-eq-000\nSMTP_PASS=p@ss=word=123\n");
+      const mod = await import("./config.js");
+      expect(mod.getAgentEnv("eqtest", "SMTP_PASS")).toBe("p@ss=word=123");
     });
   });
 });
