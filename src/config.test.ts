@@ -208,5 +208,15 @@ describe("config", () => {
       const mod = await import("./config.js");
       expect(mod.getAgentEnv("eqtest", "SMTP_PASS")).toBe("p@ss=word=123");
     });
+
+    it("strips surrounding quotes from values", async () => {
+      const filePath = join(testDir, "quoted");
+      mkdirSync(filePath, { recursive: true });
+      writeFileSync(join(filePath, "email.env"), 'MCP_API_KEY="key-quoted-111"\nSMTP_PASS=\'secret\'\nSMTP_HOST=unquoted\n');
+      const mod = await import("./config.js");
+      expect(mod.resolveAgentByApiKey("key-quoted-111")).toBe("quoted");
+      expect(mod.getAgentEnv("quoted", "SMTP_PASS")).toBe("secret");
+      expect(mod.getAgentEnv("quoted", "SMTP_HOST")).toBe("unquoted");
+    });
   });
 });

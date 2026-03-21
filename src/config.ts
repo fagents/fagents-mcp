@@ -29,7 +29,11 @@ function parseEnvFile(filePath: string): Record<string, string> {
     const eqIdx = trimmed.indexOf("=");
     if (eqIdx < 1) continue;
     const key = trimmed.slice(0, eqIdx);
-    const val = trimmed.slice(eqIdx + 1);
+    let val = trimmed.slice(eqIdx + 1);
+    // Strip matching surrounding quotes (single or double)
+    if (val.length >= 2 && ((val[0] === '"' && val[val.length - 1] === '"') || (val[0] === "'" && val[val.length - 1] === "'"))) {
+      val = val.slice(1, -1);
+    }
     env[key] = val;
   }
   return env;
