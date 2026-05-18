@@ -1,6 +1,7 @@
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import type { ImapConfig, MailboxInfo, EmailEnvelope, EmailFull, AttachmentInfo, SearchCriteria } from "./types.js";
+import { sanitizeText } from "./sanitize.js";
 
 async function withClient<T>(config: ImapConfig, fn: (client: ImapFlow) => Promise<T>): Promise<T> {
   const client = new ImapFlow({
@@ -20,7 +21,10 @@ async function withClient<T>(config: ImapConfig, fn: (client: ImapFlow) => Promi
 
 function formatAddr(addr: { name?: string; address?: string } | undefined): string {
   if (!addr) return "";
-  return addr.name ? `${addr.name} <${addr.address}>` : addr.address || "";
+  // Sanitize attacker-controlled name + address before formatting.
+  const name = sanitizeText(addr.name);
+  const address = sanitizeText(addr.address);
+  return name ? `${name} <${address}>` : address || "";
 }
 
 function formatAddrList(addrs: Array<{ name?: string; address?: string }> | undefined): string {
@@ -35,10 +39,10 @@ function envelopeToEntry(msg: any): EmailEnvelope {
     uid: msg.uid,
     from: formatAddrList(env.from),
     to: formatAddrList(env.to),
-    subject: env.subject || "",
+    subject: sanitizeText(env.subject || ""),
     date: env.date?.toISOString?.() || "",
     flags: [...(msg.flags || [])].map(String),
-    messageId: env.messageId || undefined,
+    messageId: sanitizeText(env.messageId) || undefined,
   };
 }
 
@@ -104,8 +108,8 @@ export async function getMessage(config: ImapConfig, mailbox: string, uid: numbe
           const filename = node.parameters?.name || node.dispositionParameters?.filename || `part-${partNum}`;
           attachments.push({
             part: partNum || "1",
-            filename: String(filename),
-            contentType: node.type || "application/octet-stream",
+            filename: sanitizeText(String(filename)),
+            contentType: sanitizeText(node.type || "application/octet-stream"),
             size: node.size,
           });
         }
@@ -117,12 +121,12 @@ export async function getMessage(config: ImapConfig, mailbox: string, uid: numbe
         from: formatAddrList(env.from),
         to: formatAddrList(env.to),
         cc: formatAddrList(env.cc) || undefined,
-        subject: env.subject || "",
+        subject: sanitizeText(env.subject || ""),
         date: env.date?.toISOString?.() || "",
         flags: [...(msg.flags || [])].map(String),
-        messageId: env.messageId || undefined,
-        text: parsed.text || undefined,
-        html: typeof parsed.html === "string" ? parsed.html : undefined,
+        messageId: sanitizeText(env.messageId) || undefined,
+        text: typeof parsed.text === "string" ? sanitizeText(parsed.text) || undefined : undefined,
+        html: typeof parsed.html === "string" ? sanitizeText(parsed.html) : undefined,
         attachments,
       };
     } finally {
@@ -173,7 +177,7 @@ export async function downloadAttachment(config: ImapConfig, mailbox: string, ui
       }
       return {
         content: Buffer.concat(chunks).toString("base64"),
-        contentType: meta?.contentType || "application/octet-stream",
+        contentType: sanitizeText(meta?.contentType || "application/octet-stream"),
       };
     } finally {
       lock.release();
@@ -201,6 +205,7 @@ export async function checkNewEmail(config: ImapConfig, sinceUid: number, mailbo
         const env = msg.envelope || {};
         entries.push({
           uid: msg.uid,
+          // formatAddrList -> formatAddr already sanitizes name + address.
           from: formatAddrList(env.from),
           date: env.date?.toISOString?.() || "",
         });
