@@ -56,6 +56,14 @@ function loadAgentsConfig(): AgentsConfig {
       const env = parseEnvFile(emailFile);
       const apiKey = env.MCP_API_KEY || "";
       delete env.MCP_API_KEY;
+      // Refuse to register an agent with an empty key: resolveAgentByApiKey("")
+      // would otherwise match it (two zero-length buffers pass timingSafeEqual),
+      // turning a missing MCP_API_KEY into a passwordless agent reachable with an
+      // empty x-api-key header. Skip + warn rather than abort the whole server.
+      if (!apiKey) {
+        process.stderr.write(`[config] skipping agent '${entry.name}': email.env has no MCP_API_KEY\n`);
+        continue;
+      }
       agents[entry.name] = { apiKey, ...env };
     }
   } catch (error) {
@@ -73,6 +81,9 @@ export function hasAgents(): boolean {
 }
 
 export function resolveAgentByApiKey(apiKey: string): string | null {
+  // An empty key never authenticates, even if a zero-length stored key slipped
+  // through registration. Belt-and-suspenders with the loadAgentsConfig guard.
+  if (!apiKey) return null;
   const config = loadAgentsConfig();
   const keyBuf = Buffer.from(apiKey);
 

@@ -99,6 +99,35 @@ describe("config", () => {
       const mod = await import("./config.js");
       expect(mod.resolveAgentByApiKey("wrong-key")).toBeNull();
     });
+
+    it("returns null for an empty key even when agents exist", async () => {
+      setupAgents();
+      const mod = await import("./config.js");
+      expect(mod.resolveAgentByApiKey("")).toBeNull();
+    });
+
+    it("does not register an agent whose email.env has no MCP_API_KEY", async () => {
+      // Missing MCP_API_KEY => apiKey "" => empty x-api-key would authenticate.
+      writeEmailEnv("keyless", {
+        SMTP_HOST: "smtp.biz.com",
+        SMTP_USER: "shared@biz.com",
+        SMTP_PASS: "secret",
+        IMAP_HOST: "imap.biz.com",
+        IMAP_USER: "shared@biz.com",
+        IMAP_PASS: "secret",
+      });
+      const mod = await import("./config.js");
+      expect(mod.resolveAgentByApiKey("")).toBeNull();
+      expect(mod.getAgentEnv("keyless", "SMTP_HOST")).toBeUndefined();
+    });
+
+    it("registers valid-key agents alongside a skipped keyless one", async () => {
+      setupAgents();
+      writeEmailEnv("keyless", { SMTP_HOST: "smtp.biz.com" });
+      const mod = await import("./config.js");
+      expect(mod.resolveAgentByApiKey("key-coo-123")).toBe("coo");
+      expect(mod.resolveAgentByApiKey("")).toBeNull();
+    });
   });
 
   describe("getAgentEnv", () => {

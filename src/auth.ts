@@ -20,7 +20,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
     return;
   }
 
-  if (typeof providedKey !== "string") {
+  if (typeof providedKey !== "string" || providedKey.length === 0) {
     res.status(401).json({
       jsonrpc: "2.0",
       error: { code: -32001, message: AUTH_ERROR },
